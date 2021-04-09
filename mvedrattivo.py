@@ -8,24 +8,19 @@ warnings.filterwarnings("ignore")
 
 botsink_ip='10.1.0.4'
 botsink_port='8443'
-user_name='attivo_api user'
-user_pass='attivo)rest_api_pass'
+user_name='<botsink username>'
+user_pass='<botsinkpass>'
 edr_data_grab_time=7
 attivo_data_grab_time=1
-edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/<webhookid>'
-edr_user='mvedruser'
-edr_pass='mvedrpass'
+edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/915641aa-919e-11eb-9b07-8c35ce6c722a'
+edr_user='<edruser>'
+edr_pass='<edrpass>'
 edr_region='SY'
 edr_limit = '50'
-
-
-
-
 edr_data_type= ''
 
 
 class EDRRTS():
-    ### Based on original code by Martin Ohl#######https://github.com/mohlcyber/McAfee-MVISION-EDR-Integrations
     def __init__(self):
         if edr_region == 'EU':
             self.base_url = 'https://api.soc.eu-central-1.mcafee.com'
@@ -293,7 +288,6 @@ class EDRRTS():
 
 
 class EDRHistory():
-    ### Based on original code by Martin Ohl#######https://github.com/mohlcyber/McAfee-MVISION-EDR-Integrations
     def __init__(self,hostName):
         if edr_region == 'EU':
             self.base_url = 'https://api.soc.eu-central-1.mcafee.com'
@@ -497,6 +491,11 @@ def rest_connect(url,postdata,http_header):
     response = buffer.getvalue().decode("utf-8")
     return response
 
+rest_response = rest_connect(auth_query,credential_json,auth_http_header)
+session_response = json.loads(rest_response)
+session_key=session_response["sessionKey"]
+events_header = ['Content-type: application/json','Sessionkey:'+session_key]
+
 def adsecure_q ():
     events_query_url = 'https://'+botsink_ip+':'+botsink_port+'/api/query/fetch'
     data_grab_time=str(attivo_data_grab_time)
@@ -504,10 +503,7 @@ def adsecure_q ():
     q_results=json.loads(rest_connect(events_query_url,events_post,events_header))
     return q_results
 
-rest_response = rest_connect(auth_query,credential_json,auth_http_header)
-session_response = json.loads(rest_response)
-session_key=session_response["sessionKey"]
-events_header = ['Content-type: application/json','Sessionkey:'+session_key]
+
 
 if(args.attivo=='events'):
     events_query_url = 'https://'+botsink_ip+':'+botsink_port+'/api/eventsquery/alerts'
@@ -533,11 +529,11 @@ if(args.attivo=='events'):
                 casename=urllib.parse.quote_plus('Attivo Case '+str(datetime.now()))
                 device_update=edr_hook+'/AddEvidence?eventSrc=attivo&caseHint='+opt+'&caseType=malware&caseName='+casename+'&caseSummary='+casename+'&evidenceType=Device&hostName='+opt+'&name='+opt
                 reqload=requests.get(device_update)
-                
+                print(reqload.status_code)
                 if(reqload.status_code==200 or reqload.status_code==201):
                     print("MVEDR Guided Investigation created for "+opt)
                 else:
-                    print ("Error creating Guided Investigation.."+str(reqload.status_code))
+                    print ("Error creating Guided Investigation.."+reqload.status_code)
     elif(args.command=='SEARCH' and args.edrtype != None):
         if(attackerHostname):
             print ("Attack Detected in Attivo for "+attackerHostname+" IP "+attackerIP+" Description "+each["attackDesc"])
@@ -560,7 +556,7 @@ if(args.attivo=='events'):
 elif(args.attivo=='adsecurehash' and args.adsecure != None):
     combos=[]
     q_results=adsecure_q()                                 
-    #print(json.dumps(q_results, indent=4, sort_keys=True))
+    
     for each in q_results["result"]["adsecure_queries"]:
         combos.append((each["hostname"],each["binaryname"],each["hash"]))
     combos = list(dict.fromkeys(combos))
@@ -596,6 +592,8 @@ elif(args.attivo=='adsecurehash' and args.adsecure != None):
                                 while edr.reaction_status(reaction_id) is False:
                                     print('STATUS: Waiting for 5 seconds to check again.')
                                     time.sleep(5)
+    elif:
+        print ("Enter Valid File Hash")                                
 elif(args.attivo=='adsecurecc' and args.adsecure != None):
     q_results=adsecure_q()
     combos=[]
@@ -603,7 +601,7 @@ elif(args.attivo=='adsecurecc' and args.adsecure != None):
         combos.append((each["pid"],each["hostname"],each["binaryname"]))
     combos = list(dict.fromkeys(combos))
     for uniq_combo in combos:    
-        print ("Do you want to search EDR for C&C Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
+        print ("Attivo detected C2 Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
     print ("Enter a process ID to look for Network Connections ")
     opt_pid=str(input())
     if (opt_pid.isnumeric):
