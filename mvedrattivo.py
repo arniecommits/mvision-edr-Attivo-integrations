@@ -534,10 +534,10 @@ if(args.attivo=='events'):
                 device_update=edr_hook+'/AddEvidence?eventSrc=attivo&caseHint='+opt+'&caseType=malware&caseName='+casename+'&caseSummary='+casename+'&evidenceType=Device&hostName='+opt+'&name='+opt
                 reqload=requests.get(device_update)
                 
-                if(reqload.status_code()==200 or reqload.status_code()==201):
+                if(reqload.status_code==200 or reqload.status_code==201):
                     print("MVEDR Guided Investigation created for "+opt)
                 else:
-                    print ("Error creating Guided Investigation..".str(reqload.status_code))
+                    print ("Error creating Guided Investigation.."+str(reqload.status_code))
     elif(args.command=='SEARCH' and args.edrtype != None):
         if(attackerHostname):
             print ("Attack Detected in Attivo for "+attackerHostname+" IP "+attackerIP+" Description "+each["attackDesc"])
