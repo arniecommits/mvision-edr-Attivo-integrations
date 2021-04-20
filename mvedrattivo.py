@@ -8,18 +8,23 @@ warnings.filterwarnings("ignore")
 
 botsink_ip='10.1.0.4'
 botsink_port='8443'
-user_name='<botsink username>'
-user_pass='<botsinkpass>'
+user_name='botsink_api_user'
+user_pass='botsink_pass'
+#Historical data search duration
 edr_data_grab_time=7
-attivo_data_grab_time=1
-edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/<id>'
-edr_user='<edruser>'
-edr_pass='<edrpass>'
+attivo_data_grab_time=7
+#url generated from the integrations page in MVEDR
+edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/<hookid>'
+edr_user='edruser'
+edr_pass='edrpass'
 edr_region='SY'
+#number of records to use from edr
 edr_limit = '50'
+
+
+
+
 edr_data_type= ''
-
-
 class EDRRTS():
     def __init__(self):
         if edr_region == 'EU':
@@ -445,10 +450,9 @@ auth_http_header=['Content-type: application/json']
 
 
 parser = argparse.ArgumentParser(description='Option to automate MVEDR and Attivo Investigations')
-parser.add_argument('--command', '-c', required=False, type=str, help='Provide Script action', choices=['CASE', 'SEARCH'])
-parser.add_argument('--attivo', '-a', required=True, type=str, help='Provide Script action', choices=['events', 'adsecurehash','adsecurecc'])
-parser.add_argument('--adsecure', '-s', required=False, type=str, help='Provide the ad secure profile id')
-parser.add_argument('--edrtype', '-e', required=False, type=str, help='Provide Script action', choices=[
+parser.add_argument('--command', '-c', required=False, type=str, help='Create a case or run a historical search based on Attivo Events, use --edrtype to specify the data type', choices=['CASE', 'SEARCH'])
+parser.add_argument('--attivo', '-a', required=True, type=str, help='Search for events, hash or command & control activity', choices=['events', 'adsecurehash','adsecurecc'])
+parser.add_argument('--edrtype', '-e', required=False, type=str, help='Must be used alongside --command flag', choices=[
                             'APICall',
                             'ProcessCreated',
                             'PECreated',
@@ -490,20 +494,42 @@ def rest_connect(url,postdata,http_header):
     con_handler.close()
     response = buffer.getvalue().decode("utf-8")
     return response
-
+    
+##Grab Global Session creds from Botsink
 rest_response = rest_connect(auth_query,credential_json,auth_http_header)
 session_response = json.loads(rest_response)
 session_key=session_response["sessionKey"]
 events_header = ['Content-type: application/json','Sessionkey:'+session_key]
 
-def adsecure_q ():
+
+def adsecure_q (profile_id):
     events_query_url = 'https://'+botsink_ip+':'+botsink_port+'/api/query/fetch'
     data_grab_time=str(attivo_data_grab_time)
-    events_post = '{"filter":{"and":[{"field":"querytimeutc","from":"now-'+str(data_grab_time)+'d","to":"now","operator":"<>"},{"field":"acknowledged","value":"false","operator":"="},{"field":"profileid","value":"'+args.adsecure+'","operator":"="}]},"feature":"ad_secure_queries","size":100,"from":0,"sort":[{"field":"querytimeutc","order":"desc"}]}'
+    events_post = '{"filter":{"and":[{"field":"querytimeutc","from":"now-'+str(data_grab_time)+'d","to":"now","operator":"<>"},{"field":"acknowledged","value":"false","operator":"="},{"field":"profileid","value":"'+profile_id+'","operator":"="}]},"feature":"ad_secure_queries","size":100,"from":0,"sort":[{"field":"querytimeutc","order":"desc"}]}'
     q_results=json.loads(rest_connect(events_query_url,events_post,events_header))
     return q_results
 
+def adsecure_profile_id ():
+    query_url = 'https://'+botsink_ip+':'+botsink_port+'/api/intercept/profile/list?botsinkId=0'
+    headers_dict = {"Content-Type":"application/json","sessionKey":session_key}
+    response = requests.get(query_url, headers=headers_dict,verify=False)
+    ads_profile_id=json.dumps(response.json())
+    ads_profile_id=json.loads(ads_profile_id)
+    profile_id=None
+    i=0
+    for each in ads_profile_id["profile_cfg"]:
+        if(i==0 or i==1):
+            profile_id=str(each["id"])
+            profile_name=each["profileName"]
+            print ("Found following ADSecure Profiles Name: "+profile_name+" id: "+profile_id)
+            i=i+1
+        else:
+            profile_id=str(each["id"])
+            profile_name=each["profileName"]
+            print ("Found multiple ADSecure Profiles Name: "+profile_name+" id: "+profile_id+" enter the profile id you want to use")
+            profile_id=str(input())
 
+    return profile_id
 
 if(args.attivo=='events'):
     events_query_url = 'https://'+botsink_ip+':'+botsink_port+'/api/eventsquery/alerts'
@@ -533,7 +559,7 @@ if(args.attivo=='events'):
                 if(reqload.status_code==200 or reqload.status_code==201):
                     print("MVEDR Guided Investigation created for "+opt)
                 else:
-                    print ("Error creating Guided Investigation.."+reqload.status_code)
+                    print ("Error creating Guided Investigation..".reqload.status_code)
     elif(args.command=='SEARCH' and args.edrtype != None):
         if(attackerHostname):
             print ("Attack Detected in Attivo for "+attackerHostname+" IP "+attackerIP+" Description "+each["attackDesc"])
@@ -553,10 +579,14 @@ if(args.attivo=='events'):
             else:
                 print ("Please choose correct option Y/y to continue ...")
                 exit(0)
-elif(args.attivo=='adsecurehash' and args.adsecure != None):
+    elif(args.command=='SEARCH' and args.edrtype ==None):
+        print ("Please specify the edr search type ")
+        exit(0)
+
+elif(args.attivo=='adsecurehash'):
     combos=[]
-    q_results=adsecure_q()                                 
-    
+    adsecure_profile_id=adsecure_profile_id()
+    q_results=adsecure_q(adsecure_profile_id)
     for each in q_results["result"]["adsecure_queries"]:
         combos.append((each["hostname"],each["binaryname"],each["hash"]))
     combos = list(dict.fromkeys(combos))
@@ -592,16 +622,15 @@ elif(args.attivo=='adsecurehash' and args.adsecure != None):
                                 while edr.reaction_status(reaction_id) is False:
                                     print('STATUS: Waiting for 5 seconds to check again.')
                                     time.sleep(5)
-    elif:
-        print ("Enter Valid File Hash")                                
-elif(args.attivo=='adsecurecc' and args.adsecure != None):
-    q_results=adsecure_q()
+elif(args.attivo=='adsecurecc'):
+    adsecure_profile_id=adsecure_profile_id()
+    q_results=adsecure_q(adsecure_profile_id)
     combos=[]
     for each in q_results["result"]["adsecure_queries"]:
         combos.append((each["pid"],each["hostname"],each["binaryname"]))
     combos = list(dict.fromkeys(combos))
     for uniq_combo in combos:    
-        print ("Attivo detected C2 Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
+        print ("Do you want to search EDR for C&C Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
     print ("Enter a process ID to look for Network Connections ")
     opt_pid=str(input())
     if (opt_pid.isnumeric):
