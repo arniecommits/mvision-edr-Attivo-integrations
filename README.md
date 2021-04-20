@@ -1,6 +1,6 @@
 # mvision-edr-Attivo-integrations
  These are some sample API integration patterns between Attivo's Deception Fabric and MV EDR
-The idea here is simple, Attivo's Botsink solution detects a threat and MVISION EDR provides rich data and context to the high fidelity detection from Attivo.
+The idea here is simple, Attivo's Botsink solution detects a threat and MVISION EDR provides rich data , context and response actions to the high fidelity detection from Attivo.
 
 Please fill in the following connection details in the script before executing 
 
