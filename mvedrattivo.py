@@ -8,23 +8,18 @@ warnings.filterwarnings("ignore")
 
 botsink_ip='10.1.0.4'
 botsink_port='8443'
-user_name='botsink_api_user'
-user_pass='botsink_pass'
-#Historical data search duration
-edr_data_grab_time=7
+user_name='api'
+user_pass=''
+edr_data_grab_time=2
 attivo_data_grab_time=7
-#url generated from the integrations page in MVEDR
-edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/<hookid>'
-edr_user='edruser'
-edr_pass='edrpass'
+edr_hook='https://api.soc.ap-southeast-2.mcafee.com/wh/v1/webhook/915641aa-919e-11eb-9b07-8c35ce6c722a'
+edr_user=''
+edr_pass=''
 edr_region='SY'
-#number of records to use from edr
 edr_limit = '50'
-
-
-
-
 edr_data_type= ''
+
+
 class EDRRTS():
     def __init__(self):
         if edr_region == 'EU':
@@ -142,6 +137,45 @@ class EDRRTS():
 
         return queryId
 
+    def search_pid(self,pid):
+        queryId = None
+        payload = {
+            "projections": [
+                {
+                    "name": "HostInfo",
+                    "outputs": ["hostname", "ip_address"]
+                }, {
+                    "name": "Processes",
+                    "outputs": ["id"]
+                }
+            ],
+            "condition": {
+                "or": [{
+                    "and": [{
+                        "name": "Processes",
+                        "output": "id",
+                        "op": "EQUALS",
+                        "value": str(pid)
+                    }]
+                }]
+            }
+        }
+
+        res = self.request.post(self.base_url + '/active-response/api/v1/searches',
+                                headers=self.headers,
+                                json=payload)
+        try:
+            if res.status_code == 200:
+                queryId = res.json()['id']
+                print('SEARCH: MVISION EDR search got started successfully')
+            else:
+                print('ERROR: Could not find the query ID.')
+        except Exception as e:
+            print('ERROR: Could not find the query ID. Error: {}'.format(e))
+            sys.exit()
+
+        return queryId    
+
     def search_status(self, queryId):
         status = False
         res = self.request.get(self.base_url + '/active-response/api/v1/searches/{}/status'.format(str(queryId)), headers=self.headers)
@@ -206,7 +240,36 @@ class EDRRTS():
         else:
             print('ERROR: Something went wrong to retrieve the results.')
             sys.exit()        
+    
+    def search_result_pid(self, queryId):
+        res = self.request.get(self.base_url + '/active-response/api/v1/searches/{}/results'.format(str(queryId)), headers=self.headers)
+        if res.status_code == 200:
+            try:
+                items = res.json()['totalItems']
+                react_summary = []
+                react_summary_r = []
+                for item in res.json()['items']:
+                    react_dict = {}
+                    react_dict = ('hostname '+item['output']['HostInfo|hostname'],'ip '+item['output']['HostInfo|ip_address'])
+                    react_summary.append(react_dict)
+                    react_dict_r = {}
+                    react_dict_r[item['id']] = item['output']['Processes|id']
+                    react_summary_r.append(react_dict_r)
+    
+                print('Search RESULT: MVISION EDR found {} System/s with this process id '.format(items, len(react_summary)))
 
+                return react_summary,react_summary_r
+
+            except Exception as e:
+                print('ERROR: Something went wrong to retrieve the results. Error: {}'.format(e))
+                sys.exit()
+        else:
+            print('ERROR: Something went wrong to retrieve the results.')
+            sys.exit()        
+
+    
+    
+    
     def reaction_removefile_execution(self, queryId, systemId, filePath):
         reactionId = None
 
@@ -439,6 +502,32 @@ class EDRHistory():
             self.logger.error('Error in edr.detect_search. Error: {}'.format(str(error)))
 
 
+def edr_kill_process(opt_pid):
+    edrrts=EDRRTS()
+    queryId = edrrts.search_pid(opt_pid)
+    if queryId is None:
+        sys.exit()
+    while edrrts.search_status(queryId) is False:
+        time.sleep(10)
+        results = edrrts.search_result_pid(queryId)
+        
+        result_json=json.dumps(results[0])
+        result_json=json.loads(result_json)
+        print(json.dumps(result_json, indent=4, sort_keys=True))
+        
+        if(results[1]):
+            print ("Do you want to terminate the processes from the affected systems ") 
+            opt=str(input())
+            if (opt=='y' or opt=='Y'):
+                for result in results[1]:
+                        for systemId, pid in result.items():
+                            reaction_id = edrrts.reaction_kill_execution(queryId, systemId, opt_pid)
+                            if reaction_id is None:
+                                print('ERROR: Could not create new MVISION EDR reaction')
+                            while edrrts.reaction_status(reaction_id) is False:
+                                print('STATUS: Waiting for 5 seconds to check again.')
+                                time.sleep(5)
+
 
 user_encodedBytes = base64.urlsafe_b64encode(user_name.encode("utf-8"))
 encoded_user = str(user_encodedBytes, "utf-8")
@@ -450,7 +539,7 @@ auth_http_header=['Content-type: application/json']
 
 
 parser = argparse.ArgumentParser(description='Option to automate MVEDR and Attivo Investigations')
-parser.add_argument('--command', '-c', required=False, type=str, help='Create a case or run a historical search based on Attivo Events, use --edrtype to specify the data type', choices=['CASE', 'SEARCH'])
+parser.add_argument('--command', '-c', required=False, type=str, help='Create a case or run a historical search based on Attivo Events use, --edrtype to specify the data type', choices=['CASE', 'SEARCH'])
 parser.add_argument('--attivo', '-a', required=True, type=str, help='Search for events, hash or command & control activity', choices=['events', 'adsecurehash','adsecurecc'])
 parser.add_argument('--edrtype', '-e', required=False, type=str, help='Must be used alongside --command flag', choices=[
                             'APICall',
@@ -537,13 +626,20 @@ if(args.attivo=='events'):
     events_post = '{"timestampStart":"now-'+data_grab_time+'d", "timestampEnd":"now"}' 
     q_results=json.loads(rest_connect(events_query_url,events_post,events_header))
     combos=[]
+    #print(json.dumps(q_results, indent=4, sort_keys=True))
     for each in q_results["eventdata"]:
         attackdesc_url=urllib.parse.quote_plus(each["attackDesc"].strip())
         attackerHostname=each["attackerHostname"]
         attackName_url=urllib.parse.quote_plus(each["attackName"].strip())
         attackerIP=each["sourceIP"]
+        attacker_host_from_dom=each["sourceIPDomain"]
+        attacker_host_from_dom=attacker_host_from_dom.partition('.')
+        attacker_host_from_dom=attacker_host_from_dom[0]
         target=each["details"]["Target"]
+        if(attackerHostname==None):
+            attackerHostname=attacker_host_from_dom
         combos.append((attackerIP,attackerHostname,each["attackDesc"],each["attackName"],attackdesc_url,attackName_url))
+        
     if(args.command=='CASE'):
         
         if(attackerHostname):
@@ -561,9 +657,10 @@ if(args.attivo=='events'):
                 else:
                     print ("Error creating Guided Investigation..".reqload.status_code)
     elif(args.command=='SEARCH' and args.edrtype != None):
+        	
         if(attackerHostname):
             print ("Attack Detected in Attivo for "+attackerHostname+" IP "+attackerIP+" Description "+each["attackDesc"])
-            print ("Do you want to search MFE EDR alerts for "+attackerHostname)
+            print ("Do you want to search MFE EDR historical data for "+attackerHostname)
             opt=str(input())
             if(opt=='y' or opt=='Y'):
                 edr_data_type=args.edrtype
@@ -579,6 +676,8 @@ if(args.attivo=='events'):
             else:
                 print ("Please choose correct option Y/y to continue ...")
                 exit(0)
+        else:
+            print("Insufficient data in Attivo logs for EDR query")        
     elif(args.command=='SEARCH' and args.edrtype ==None):
         print ("Please specify the edr search type ")
         exit(0)
@@ -587,79 +686,88 @@ elif(args.attivo=='adsecurehash'):
     combos=[]
     adsecure_profile_id=adsecure_profile_id()
     q_results=adsecure_q(adsecure_profile_id)
-    for each in q_results["result"]["adsecure_queries"]:
-        combos.append((each["hostname"],each["binaryname"],each["hash"]))
-    combos = list(dict.fromkeys(combos))
-    for uniq_combo in combos:    
-        print ("Found following Attivo Adsecure Reports for Host "+uniq_combo[0]+" "+" Process Name "+uniq_combo[1]+" Hashes "+uniq_combo[2])
-    print ("Enter a file hash from the list to query MVEDR")
-    opt=str(input())
-    if (len(opt)==32 or len(opt)==64 or len(opt)==256):
-        edr=EDRRTS()
-        queryId = edr.searchhash(uniq_combo[2])
-        if queryId is None:
-            sys.exit()
-        while edr.search_status(queryId) is False:
-            time.sleep(10)
-            results=edr.search_result(queryId)
-            if(results):
-                results_p=json.dumps(results[0])
-                results_p=json.loads(results_p)
-                print(json.dumps(results_p, indent=4, sort_keys=True))
-        if(results[1]):
-                print ("Do you want to remove the file from the affected systems ") 
-                opt=str(input())
-                if (opt=='y' or opt=='Y'):
-                    if results[1] == []:
-                        print('INFO: All Files deleted on Systems')
-                        sys.exit()
-                    for result in results[1]:
-                        for systemId, filePath in result.items():
-                            print (systemId,filePath)
-                            reaction_id = edr.reaction_removefile_execution(queryId, systemId, filePath)  
-                            if reaction_id is None:
-                                print('ERROR: Could not create new MVISION EDR reaction')
-                                while edr.reaction_status(reaction_id) is False:
-                                    print('STATUS: Waiting for 5 seconds to check again.')
-                                    time.sleep(5)
+    
+    if (q_results["result"]["totalCount"]>0):
+        for each in q_results["result"]["adsecure_queries"]:
+            combos.append((each["hostname"],each["binaryname"],each["hash"],each["pid"]))
+        combos = list(dict.fromkeys(combos))
+        for uniq_combo in combos:    
+            print ("Found following Attivo Adsecure Reports for Host "+uniq_combo[0]+" "+" Process Name "+uniq_combo[1]+" Hashes "+uniq_combo[2]+" PID "+uniq_combo[3])
+        print ("Enter a file hash/process id from the list to query MVEDR")
+        opt=str(input())
+        if (len(opt)==32 or len(opt)==64 or len(opt)==256):
+            edr=EDRRTS()
+            queryId = edr.searchhash(uniq_combo[2])
+            if queryId is None:
+                sys.exit()
+            while edr.search_status(queryId) is False:
+                time.sleep(10)
+                results=edr.search_result(queryId)
+                if(results):
+                    results_p=json.dumps(results[0])
+                    results_p=json.loads(results_p)
+                    print(json.dumps(results_p, indent=4, sort_keys=True))
+            if(results[1]):
+                    print ("Do you want to remove the file from the affected systems ") 
+                    opt=str(input())
+                    if (opt=='y' or opt=='Y'):
+                        if results[1] == []:
+                            print('INFO: All Files deleted on Systems')
+                            sys.exit()
+                        for result in results[1]:
+                            for systemId, filePath in result.items():
+                                print (systemId,filePath)
+                                reaction_id = edr.reaction_removefile_execution(queryId, systemId, filePath)  
+                                if reaction_id is None:
+                                    print('ERROR: Could not create new MVISION EDR reaction')
+                                    while edr.reaction_status(reaction_id) is False:
+                                        print('STATUS: Waiting for 5 seconds to check again.')
+                                        time.sleep(5)
+        else:
+            edr_kill_process(opt)                    
+    else:
+        print ("No Attivo Endpoint processes detected ")                                    
 elif(args.attivo=='adsecurecc'):
     adsecure_profile_id=adsecure_profile_id()
     q_results=adsecure_q(adsecure_profile_id)
     combos=[]
-    for each in q_results["result"]["adsecure_queries"]:
-        combos.append((each["pid"],each["hostname"],each["binaryname"]))
-    combos = list(dict.fromkeys(combos))
-    for uniq_combo in combos:    
-        print ("Do you want to search EDR for C&C Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
-    print ("Enter a process ID to look for Network Connections ")
-    opt_pid=str(input())
-    if (opt_pid.isnumeric):
-        edrrts=EDRRTS()
-        queryId = edrrts.search_network(opt_pid)
-        if queryId is None:
-            sys.exit()
-        while edrrts.search_status(queryId) is False:
-            time.sleep(10)
-            results = edrrts.search_result_network(queryId)
-            
-            result_json=json.dumps(results[0])
-            result_json=json.loads(result_json)
-            print(json.dumps(result_json, indent=4, sort_keys=True))
-            
-            if(results[1]):
-                print ("Do you want to terminate the processes from the affected systems ") 
-                opt=str(input())
-                if (opt=='y' or opt=='Y'):
-                   for result in results[1]:
-                        for systemId, pid in result.items():
-                            reaction_id = edrrts.reaction_kill_execution(queryId, systemId, opt_pid)
-                            if reaction_id is None:
-                                print('ERROR: Could not create new MVISION EDR reaction')
-                            while edrrts.reaction_status(reaction_id) is False:
-                                print('STATUS: Waiting for 5 seconds to check again.')
-                                time.sleep(5)
-        else:
-            print ("Enter valid process id")                
+    if (q_results["result"]["totalCount"]>0):
+        for each in q_results["result"]["adsecure_queries"]:
+            combos.append((each["pid"],each["hostname"],each["binaryname"]))
+        combos = list(dict.fromkeys(combos))
+        for uniq_combo in combos:    
+            print ("Do you want to search EDR for C&C Activity around Process ID: "+uniq_combo[0]+" Hostname "+uniq_combo[1]+" Name: "+uniq_combo[2])
+        print ("Enter a process ID to look for Network Connections ")
+        opt_pid=str(input())
+        if (opt_pid.isnumeric):
+            edrrts=EDRRTS()
+            queryId = edrrts.search_network(opt_pid)
+            if queryId is None:
+                sys.exit()
+            while edrrts.search_status(queryId) is False:
+                time.sleep(10)
+                results = edrrts.search_result_network(queryId)
+                
+                result_json=json.dumps(results[0])
+                result_json=json.loads(result_json)
+                print(json.dumps(result_json, indent=4, sort_keys=True))
+                
+                if(results[1]):
+                    print ("Do you want to terminate the processes from the affected systems ") 
+                    opt=str(input())
+                    if (opt=='y' or opt=='Y'):
+                        for result in results[1]:
+                                for systemId, pid in result.items():
+                                    reaction_id = edrrts.reaction_kill_execution(queryId, systemId, opt_pid)
+                                    if reaction_id is None:
+                                        print('ERROR: Could not create new MVISION EDR reaction')
+                                    while edrrts.reaction_status(reaction_id) is False:
+                                        print('STATUS: Waiting for 5 seconds to check again.')
+                                        time.sleep(5)
+            else:
+                print ("Enter valid process id")
+    else:
+        print ("No Attivo Endpoint processes detected ")                        
 else:
     print ("Check valid option combinations")
 
